@@ -280,6 +280,10 @@ def build_earthquake_card_footer(
             warn_areas = list(metadata.get("jma_warning_areas") or [])
             if warn_areas:
                 footer.append({"label": "警报区域", "value": "、".join(warn_areas[:6]) + ("等" if len(warn_areas) > 6 else "")})
+        # 预估震度范围
+        warning_ranges = list(metadata.get("jma_warning_area_ranges") or [])
+        if warning_ranges:
+            footer.append({"label": "预估震度范围", "value": " / ".join(str(r).strip() for r in warning_ranges if str(r).strip())})
 
     elif source_id in ("jma_p2p_info", "jma_wolfx_info"):
         revision = str(metadata.get("revision") or "").strip()

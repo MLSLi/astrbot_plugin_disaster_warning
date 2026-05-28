@@ -45,7 +45,17 @@ class WeatherCardBuilder:
 
         title = domain.title or ""
         headline = domain.headline or ""
-        match_text = title or headline
+        metadata = dict(event.metadata or {})
+
+        # 匹配文本候选集：对齐 WeatherAlertPresenter，覆盖 weather_type + metadata + title + headline
+        match_candidates = [
+            metadata.get("weather_type", ""),
+            metadata.get("type", ""),
+            title,
+            headline,
+        ]
+        match_text = " ".join(str(c).strip() for c in match_candidates if str(c).strip())
+
         emoji = "⛈️"
         for name in SORTED_WEATHER_TYPES:
             if name in match_text:
@@ -54,8 +64,10 @@ class WeatherCardBuilder:
 
         color_emoji = ""
         color_level = ""
+        # 颜色等级候选集：对齐 WeatherAlertPresenter，覆盖 severity_color + title + headline
+        color_candidates = [metadata.get("severity_color", ""), title, headline]
         for color, icon in COLOR_LEVEL_EMOJI.items():
-            if color in match_text:
+            if any(color and color in str(c) for c in color_candidates if c):
                 color_emoji = icon
                 color_level = color
                 break
@@ -71,7 +83,6 @@ class WeatherCardBuilder:
             else "Unknown Time"
         )
 
-        metadata = dict(event.metadata or {})
         description = metadata.get("description", "")
         max_len = options.get("max_description_length", 512)
         if max_len > 0 and len(description) > max_len:

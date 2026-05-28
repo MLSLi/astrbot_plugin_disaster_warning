@@ -197,6 +197,9 @@ class PushFlowHandler:
             msg_cfg = session_message_format_config.get(session, {})
             if not msg_cfg.get("include_map", False):
                 continue
+            # 卡片已内嵌地图，不再额外发送分离地图瓦片
+            if msg_cfg.get("use_earthquake_card", False):
+                continue
 
             config_key = json.dumps(msg_cfg, sort_keys=True, ensure_ascii=False)
             if config_key not in grouped_sessions:
