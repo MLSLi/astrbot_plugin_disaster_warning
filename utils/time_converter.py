@@ -3,6 +3,7 @@
 统一处理时间的解析、时区转换和格式化
 """
 
+import re
 from datetime import datetime, timedelta, timezone
 
 # 时区定义映射
@@ -27,10 +28,11 @@ except ImportError:
 class TimeConverter:
     """时间转换工具类"""
 
-    # 对应预定义的时区字典映射，防止类方法无法获取 TIMEZONES 属性
+    # 增加 TIMEZONES 类属性，指向全局的 TIMEZONES 字典
+    # 这是为了解决 type object 'TimeConverter' has no attribute 'TIMEZONES' 错误
     TIMEZONES = TIMEZONES
 
-    # 时区缓存，避免高频创建 ZoneInfo 时区对象造成性能耗损
+    # 时区缓存
     _timezone_cache = {}
 
     @staticmethod
@@ -40,11 +42,11 @@ class TimeConverter:
         """
         解析各种格式的时间输入为 datetime 对象
 
-        参数说明：
-        - time_input：时间字符串、时间戳（秒或毫秒）、datetime 对象或 None
+        Args:
+            time_input: 时间字符串、时间戳(秒/毫秒)、datetime对象或None
 
-        返回值：
-        - datetime 对象（可能是 Naive 或 Aware），解析失败时返回 None
+        Returns:
+            datetime对象 (可能是 Naive 或 Aware)，解析失败返回 None
         """
         if time_input is None:
             return None
@@ -77,6 +79,12 @@ class TimeConverter:
             try:
                 # 处理 Python < 3.11 对 Z 的兼容性 (虽然 3.11+ 支持 Z，但为了稳健)
                 clean_str = time_str.replace("Z", "+00:00")
+                # 归一化不足6位的小数秒，兼容低版本 Python 的 fromisoformat
+                clean_str = re.sub(
+                    r"\.(\d{1,5})([+-]|$)",
+                    lambda m: "." + m.group(1).ljust(6, "0") + (m.group(2) if m.group(2) != "$" else ""),
+                    clean_str,
+                )
                 return datetime.fromisoformat(clean_str)
             except ValueError:
                 pass
@@ -199,6 +207,6 @@ class TimeConverter:
             dt = dt.astimezone(target_tz)
 
         # 返回格式化字符串 + 时区名
-        # 使用 _safe_strftime 替代直接调用 strftime，规避 Windows 下 GBK 编码缺陷
+        # 使用 _safe_strftime 替代直接调用 strftime
         time_str = TimeConverter._safe_strftime(dt, fmt)
         return f"{time_str} ({target_timezone})"

@@ -163,6 +163,16 @@ class MessagePushManager:
         return self._bootstrap_service.global_quake_card_builder
 
     @property
+    def earthquake_card_builder(self):
+        """通用地震卡片构建器。"""
+        return self._bootstrap_service.earthquake_card_builder
+
+    @property
+    def weather_card_builder(self):
+        """气象预警卡片构建器。"""
+        return self._bootstrap_service.weather_card_builder
+
+    @property
     def browser_manager(self):
         """浏览器管理器。"""
         return self.__dict__.get("_browser_manager")

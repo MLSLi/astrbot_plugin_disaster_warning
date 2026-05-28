@@ -136,6 +136,69 @@ class MessageBuildService:
         }
         return json.dumps(key_obj, sort_keys=True, ensure_ascii=False)
 
+    @staticmethod
+    def _build_earthquake_card_cache_key(
+        earthquake: EventEnvelope,
+        message_format_config: dict[str, Any],
+        display_timezone: str,
+    ) -> str:
+        """构建通用地震卡片缓存键。"""
+        identity = earthquake.identity
+        domain_event = earthquake.event
+        if not isinstance(domain_event, EarthquakeEvent):
+            raise TypeError("earthquake card cache key requires EarthquakeEvent")
+
+        report_num = resolve_report_num(earthquake) or 1
+        key_obj = {
+            "type": "earthquake_card",
+            "event_id": getattr(identity, "event_id", "") or "unknown_event",
+            "source_id": earthquake.source_id or "",
+            "report_num": report_num,
+            "occurred_at": domain_event.occurred_at.isoformat()
+            if getattr(domain_event, "occurred_at", None)
+            else None,
+            "latitude": domain_event.latitude,
+            "longitude": domain_event.longitude,
+            "magnitude": domain_event.magnitude,
+            "depth": domain_event.depth,
+            "intensity": domain_event.intensity,
+            "place_name": domain_event.place_name,
+            "template": message_format_config.get("earthquake_card_template", "Aurora"),
+            "map_source": message_format_config.get("map_source", "PetalMap矢量图亮"),
+            "map_zoom_level": message_format_config.get("map_zoom_level", 5),
+            "playwright_mode": message_format_config.get("playwright_mode", "local"),
+            "timezone": display_timezone,
+        }
+        return json.dumps(key_obj, sort_keys=True, ensure_ascii=False)
+
+    @staticmethod
+    def _build_weather_card_cache_key(
+        weather: EventEnvelope,
+        weather_config: dict[str, Any],
+        display_timezone: str,
+    ) -> str:
+        """构建气象卡片缓存键。"""
+        domain_event = weather.event
+        if not isinstance(domain_event, WeatherEvent):
+            raise TypeError("weather card cache key requires WeatherEvent")
+
+        description = ""
+        metadata = weather.metadata if isinstance(weather.metadata, dict) else {}
+        if isinstance(metadata, dict):
+            description = str(metadata.get("description", ""))[:200]
+
+        key_obj = {
+            "type": "weather_card",
+            "event_id": weather.id or "unknown_event",
+            "title": domain_event.title,
+            "headline": domain_event.headline,
+            "description": description,
+            "template": weather_config.get("weather_card_template", "Aurora"),
+            "max_description_length": weather_config.get("max_description_length", 512),
+            "timezone": display_timezone,
+        }
+        return json.dumps(key_obj, sort_keys=True, ensure_ascii=False)
+
     async def _append_remote_image_component(
         self,
         chain: MessageChain,
@@ -220,15 +283,22 @@ class MessageBuildService:
         source_id = self._resolve_source_id(event)
         message_format_config = active_config.get("message_format", {})
 
-        # 若当前事件满足 Global Quake 卡片条件，则优先直接返回整张卡片消息（包含内置地图和指标图）。
-        global_quake_card = await self._try_build_global_quake_card(
+        # 若当前事件满足卡片条件，则优先直接返回卡片消息（包含内置地图）。
+        earthquake_card = await self._try_build_earthquake_card(
             event,
             source_id=source_id,
             active_config=active_config,
             message_format_config=message_format_config,
         )
-        if global_quake_card is not None:
-            return global_quake_card
+        if earthquake_card is not None:
+            return earthquake_card
+
+        weather_card = await self._try_build_weather_card(
+            event,
+            active_config=active_config,
+        )
+        if weather_card is not None:
+            return weather_card
 
         # 否则常规构建普通文本消息
         chain = self.manager.text_message_builder.build(
@@ -310,7 +380,7 @@ class MessageBuildService:
         map_cache_key = self._build_map_cache_key(lat, lon, config)
         return await self.manager._render_with_cache(map_cache_key, render_map)
 
-    async def _try_build_global_quake_card(
+    async def _try_build_earthquake_card(
         self,
         event: EventEnvelope,
         *,
@@ -318,26 +388,53 @@ class MessageBuildService:
         active_config: dict[str, Any],
         message_format_config: dict[str, Any],
     ) -> MessageChain | None:
-        """尝试构建 Global Quake 信息展示卡片。"""
-        use_gq_card = message_format_config.get("use_global_quake_card", False)
+        """尝试构建通用地震信息展示卡片（支持所有地震数据源）。"""
+        use_card = message_format_config.get("use_earthquake_card", False)
         domain_event = self._get_domain_event(event)
         if not (
-            source_id == "global_quake"
-            and use_gq_card
+            use_card
             and isinstance(domain_event, EarthquakeEvent)
         ):
             return None
 
         try:
-            return await self.manager.global_quake_card_builder.build(
+            return await self.manager.earthquake_card_builder.build(
                 event,
                 active_config=active_config,
                 message_format_config=message_format_config,
-                cache_key_builder=self._build_global_quake_card_cache_key,
+                cache_key_builder=self._build_earthquake_card_cache_key,
                 render_with_cache=self.manager._render_with_cache,
             )
         except Exception as e:
-            logger.error(f"[灾害预警] Global Quake 卡片渲染失败: {e}，回退到文本模式")
+            logger.error(f"[灾害预警] 地震卡片渲染失败 ({source_id}): {e}，回退到文本模式")
+            return None
+
+    async def _try_build_weather_card(
+        self,
+        event: EventEnvelope,
+        *,
+        active_config: dict[str, Any],
+    ) -> MessageChain | None:
+        """尝试构建气象预警卡片。"""
+        weather_config = active_config.get("weather_config", {})
+        use_card = weather_config.get("use_weather_card", False)
+        domain_event = self._get_domain_event(event)
+        if not (
+            use_card
+            and isinstance(domain_event, WeatherEvent)
+        ):
+            return None
+
+        try:
+            return await self.manager.weather_card_builder.build(
+                event,
+                active_config=active_config,
+                weather_config=weather_config,
+                cache_key_builder=self._build_weather_card_cache_key,
+                render_with_cache=self.manager._render_with_cache,
+            )
+        except Exception as e:
+            logger.error(f"[灾害预警] 气象卡片渲染失败: {e}，回退到文本模式")
             return None
 
     async def _append_map_if_needed(

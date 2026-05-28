@@ -15,9 +15,11 @@ from astrbot.api import logger
 from ...services.config.config_service import ConfigAccessor
 from ...services.identity.event_deduplication_service import EventDeduplicationService
 from ..builders.card_message_builder import CardMessageBuilder
+from ..builders.earthquake_card_builder import EarthquakeCardBuilder
 from ..builders.global_quake_card_builder import GlobalQuakeCardBuilder
 from ..builders.map_attachment_builder import MapAttachmentBuilder
 from ..builders.text_message_builder import TextMessageBuilder
+from ..builders.weather_card_builder import WeatherCardBuilder
 from ..render.remote_media_fetcher import RemoteMediaFetcher
 from .browser_manager import BrowserManager
 
@@ -33,6 +35,8 @@ class MessageManagerBootstrapService:
         self.text_message_builder = None
         self.card_message_builder = None
         self.global_quake_card_builder = None
+        self.earthquake_card_builder = None
+        self.weather_card_builder = None
         self.remote_media_fetcher = None
 
     def setup_filters(self, config: dict[str, Any]) -> None:
@@ -79,9 +83,11 @@ class MessageManagerBootstrapService:
 
         # 只有本地浏览器模式且确实需要图形渲染时才后台预热，
         # 这样既能缩短首次渲染等待，也能避免无地图场景白白消耗资源。
+        weather_cfg = self.manager.config.get("weather_config", {})
         if playwright_mode == "local" and (
             msg_config.get("include_map", False)
-            or msg_config.get("use_global_quake_card", False)
+            or msg_config.get("use_earthquake_card", False)
+            or weather_cfg.get("use_weather_card", False)
         ):
             logger.debug("[灾害预警] 检测到已启用卡片渲染功能，正在后台预热浏览器...")
             asyncio.create_task(self.manager.browser_manager.initialize())
@@ -105,6 +111,16 @@ class MessageManagerBootstrapService:
             browser_manager=self.manager.browser_manager,
         )
         self.global_quake_card_builder = GlobalQuakeCardBuilder(
+            plugin_root=self.manager.plugin_root,
+            temp_dir=str(self.manager.temp_dir),
+            browser_manager=self.manager.browser_manager,
+        )
+        self.earthquake_card_builder = EarthquakeCardBuilder(
+            plugin_root=self.manager.plugin_root,
+            temp_dir=str(self.manager.temp_dir),
+            browser_manager=self.manager.browser_manager,
+        )
+        self.weather_card_builder = WeatherCardBuilder(
             plugin_root=self.manager.plugin_root,
             temp_dir=str(self.manager.temp_dir),
             browser_manager=self.manager.browser_manager,

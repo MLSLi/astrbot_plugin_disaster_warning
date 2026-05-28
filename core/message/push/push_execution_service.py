@@ -159,11 +159,11 @@ class PushExecutionService:
                         "playwright_mode": message_format_config.get(
                             "playwright_mode", "local"
                         ),
-                        "use_global_quake_card": message_format_config.get(
-                            "use_global_quake_card", False
+                        "use_earthquake_card": message_format_config.get(
+                            "use_earthquake_card", False
                         ),
-                        "global_quake_template": message_format_config.get(
-                            "global_quake_template", "Aurora"
+                        "earthquake_card_template": message_format_config.get(
+                            "earthquake_card_template", "Aurora"
                         ),
                         "detailed_jma_intensity": message_format_config.get(
                             "detailed_jma_intensity", False
@@ -175,6 +175,12 @@ class PushExecutionService:
                         ),
                         "max_description_length": weather_config.get(
                             "max_description_length", 384
+                        ),
+                        "use_weather_card": weather_config.get(
+                            "use_weather_card", False
+                        ),
+                        "weather_card_template": weather_config.get(
+                            "weather_card_template", "Aurora"
                         ),
                     },
                 },
