@@ -217,6 +217,22 @@ def _determine_jma_info_type(metadata: dict) -> str:
     return "震源・震度情报"
 
 
+def _extract_gq_payload_data(envelope: EventEnvelope) -> dict:
+    """从 GlobalQuake 载荷中提取深层质量数据。"""
+    payload = envelope.payload
+    event_payload: dict = {}
+    if hasattr(payload, "to_dict"):
+        event_payload = dict(payload.to_dict() or {})
+    elif hasattr(payload, "raw") and isinstance(payload.raw, dict):
+        event_payload = payload.raw
+    data_inner = event_payload.get("data", {}) if isinstance(event_payload, dict) else {}
+    return {
+        "event_payload": event_payload,
+        "data_inner": data_inner,
+        "quality": data_inner.get("quality", {}) if isinstance(data_inner, dict) else {},
+    }
+
+
 def build_earthquake_card_footer(
     envelope: EventEnvelope,
     base_footer: list[dict[str, str]],
@@ -325,20 +341,45 @@ def build_earthquake_card_footer(
             footer.append({"label": "测定类型", "value": info_type})
 
     elif source_id == "global_quake":
+        gq = _extract_gq_payload_data(envelope)
+        event_payload = gq["event_payload"]
+        quality = gq["quality"]
+
         footer.append({"label": "报数", "value": report_info})
+
+        # PGA：metadata.max_pga → payload.maxPGA
         max_pga = metadata.get("max_pga")
+        if max_pga is None and isinstance(event_payload, dict):
+            max_pga = event_payload.get("maxPGA")
         if max_pga is not None:
             footer.append({"label": "最大加速度 (PGA)", "value": f"{float(max_pga):.1f} gal"})
+
+        # 测站：metadata.stations → payload.stationCount
         stations = metadata.get("stations") or {}
+        if not stations and isinstance(event_payload, dict):
+            stations = event_payload.get("stationCount") or event_payload.get("stations") or {}
         used = stations.get("used", 0) if isinstance(stations, dict) else 0
         total = stations.get("total", 0) if isinstance(stations, dict) else 0
         footer.append({"label": "触发测站 (Used/Total)", "value": f"{used} / {total}"})
-        loc_err = metadata.get("location_error")
-        if isinstance(loc_err, (int, float)):
-            footer.append({"label": "定位误差 (Loc Err)", "value": f"{loc_err:.1f} km"})
+
+        # quality 数据：metadata.quality 是 parser 直接注入的嵌套 dict
+        meta_quality = metadata.get("quality") or {}
+        if not isinstance(meta_quality, dict):
+            meta_quality = {}
+
+        # 定位误差：metadata.quality.err_origin → payload.quality.errOrigin
+        err_origin = meta_quality.get("err_origin") or quality.get("errOrigin") or quality.get("err_origin")
+        if err_origin is not None:
+            footer.append({"label": "定位误差 (Loc Err)", "value": f"{float(err_origin):.1f} km"})
+        elif isinstance(metadata.get("location_error"), (int, float)):
+            footer.append({"label": "定位误差 (Loc Err)", "value": f"{metadata.get('location_error'):.1f} km"})
         else:
             footer.append({"label": "定位误差 (Loc Err)", "value": "N/A"})
-        quality_pct = metadata.get("quality_pct")
-        footer.append({"label": "数据拟合 (Quality)", "value": f"{quality_pct}%" if quality_pct is not None else "N/A"})
+
+        # 数据拟合：metadata.quality.pct → payload.quality.pct
+        quality_pct = meta_quality.get("pct") or quality.get("pct")
+        if quality_pct is not None:
+            quality_pct = f"{quality_pct}%" if not str(quality_pct).endswith("%") else str(quality_pct)
+        footer.append({"label": "数据拟合 (Quality)", "value": str(quality_pct) if quality_pct is not None else "N/A"})
 
     return footer
