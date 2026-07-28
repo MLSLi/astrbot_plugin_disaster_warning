@@ -37,13 +37,8 @@ def evaluate_push_decision_with_components(
 
     local_estimation = rule_context.extras.get("local_estimation")
     if isinstance(local_estimation, dict) and local_estimation:
-        # 规则链可能在判定过程中顺带产出本地预估信息，
-        # 这里把它回写到事件元数据，供后续展示器直接复用。
-        metadata = getattr(event, "metadata", None)
-        if not isinstance(metadata, dict):
-            metadata = {}
-            event.metadata = metadata
-        metadata["local_estimation"] = dict(local_estimation)
+        # 本地预估属于会话级结果，随决策返回，避免写入共享事件后串到其他会话。
+        decision.context["local_estimation"] = dict(local_estimation)
 
     if not decision.accepted and emit_filter_log and logger_instance is not None:
         detail_suffix = f"，{decision.detail}" if decision.detail else ""

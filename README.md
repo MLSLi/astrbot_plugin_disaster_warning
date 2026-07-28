@@ -713,11 +713,13 @@
 - **详细显示 JMA 区域震度**:
   - **开启**: 将列出所有观测到震度的具体市町村名称。
   - **关闭**: 仅显示全日本的最大观测震度地区。
-- **启用 Global Quake 卡片消息**:
-  - 开启后，插件会启动后台渲染器，将复杂的数值转换为直观的彩色卡片图片。
-- **Global Quake 卡片模板**:
+- **启用地震卡片消息 (`use_earthquake_card`)**:
+  - 开启后，Global Quake、CENC、USGS、JMA、CEA、CWA 等地震来源都会渲染为统一图片卡片。
+- **地震卡片模板 (`earthquake_card_template`)**:
   - `Aurora` (极光): 浅色背景，清新现代。
   - `DarkNight` (暗夜): 深色背景，极客风格。
+- **旧版 Global Quake 卡片配置**:
+  - `use_global_quake_card` 与 `global_quake_template` 会继续生效，仅用于兼容已有配置。
 - **Playwright 运行模式 (`playwright_mode`)**:
   - `local`：使用本地浏览器渲染（需安装 Playwright 浏览器内核）。
   - `remote`：连接远程 Playwright 服务，适合容器/轻量主机环境。
@@ -735,8 +737,8 @@
   "playwright_mode": "local",                  // 渲染模式：local/remote
   "playwright_server_url": "",                 // remote 模式下填写远程服务地址
   "detailed_jma_intensity": false,             // 是否显示全部 JMA 震度区域
-  "use_global_quake_card": false,              // 是否启用 GQ 卡片渲染
-  "global_quake_template": "Aurora",           // GQ 卡片视觉主题
+  "use_earthquake_card": false,                 // 是否启用全部地震来源卡片
+  "earthquake_card_template": "Aurora",        // 地震卡片视觉主题
   "browser_pool_size": 2                       // 浏览器页面池大小 (默认2)
 }
 ```
@@ -752,6 +754,8 @@
   - **最低预警级别 (`min_color_level`)**: 等级排序：白色 < 蓝色 < 黄色 < 橙色 < 红色。
 - **正文描述字数限制 (`max_description_length`)**: 超过此字数将被截断。
 - **显示预警图标 (`enable_weather_icon`)**: 根据预警类型自动附加官方图标。
+- **启用气象卡片 (`use_weather_card`)**: 将气象预警渲染为图片卡片。
+- **气象卡片模板 (`weather_card_template`)**: 可选 `Aurora` 或 `DarkNight`。
 
 ```json
 "weather_config": {
@@ -760,7 +764,9 @@
     "keywords": ["广西", "南宁"],     // 仅推送包含这些关键词的地区的预警（留空为全国）
     "min_color_level": "黄色"         // 推送的最低预警颜色级别要求
   },
-  "max_description_length": 384       // 正文描述信息的截断上限
+  "max_description_length": 384,      // 正文描述信息的截断上限
+  "use_weather_card": false,          // 是否启用气象预警卡片
+  "weather_card_template": "Aurora"  // 气象卡片视觉主题
 }
 ```
 

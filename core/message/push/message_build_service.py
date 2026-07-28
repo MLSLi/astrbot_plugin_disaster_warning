@@ -103,6 +103,10 @@ class MessageBuildService:
             raise TypeError("Global Quake card cache key requires EarthquakeEvent")
 
         report_num = resolve_report_num(earthquake) or 1
+        payload_data = payload.to_dict() if hasattr(payload, "to_dict") else {}
+        payload_inner = (
+            payload_data.get("data", {}) if isinstance(payload_data, dict) else {}
+        )
         payload_marker = (
             payload.raw.get("id")
             if isinstance(payload, object)
@@ -127,6 +131,10 @@ class MessageBuildService:
             "place_name": domain_event.place_name,
             "max_pga": metadata.get("max_pga"),
             "stations": metadata.get("stations"),
+            "quality": metadata.get("quality"),
+            "payload_quality": payload_inner.get("quality")
+            if isinstance(payload_inner, dict)
+            else None,
             "payload_marker": payload_marker,
             "template": message_format_config.get("global_quake_template", "Aurora"),
             "map_source": message_format_config.get("map_source", "PetalMap矢量图亮"),
@@ -134,7 +142,7 @@ class MessageBuildService:
             "playwright_mode": message_format_config.get("playwright_mode", "local"),
             "timezone": display_timezone,
         }
-        return json.dumps(key_obj, sort_keys=True, ensure_ascii=False)
+        return json.dumps(key_obj, sort_keys=True, ensure_ascii=False, default=str)
 
     @staticmethod
     def _build_earthquake_card_cache_key(
@@ -162,14 +170,19 @@ class MessageBuildService:
             "magnitude": domain_event.magnitude,
             "depth": domain_event.depth,
             "intensity": domain_event.intensity,
+            "scale": domain_event.scale,
             "place_name": domain_event.place_name,
+            "headline": domain_event.headline,
+            "province": domain_event.province,
+            "is_final": getattr(identity, "is_final", False),
+            "metadata": earthquake.metadata,
             "template": message_format_config.get("earthquake_card_template", "Aurora"),
             "map_source": message_format_config.get("map_source", "PetalMap矢量图亮"),
             "map_zoom_level": message_format_config.get("map_zoom_level", 5),
             "playwright_mode": message_format_config.get("playwright_mode", "local"),
             "timezone": display_timezone,
         }
-        return json.dumps(key_obj, sort_keys=True, ensure_ascii=False)
+        return json.dumps(key_obj, sort_keys=True, ensure_ascii=False, default=str)
 
     @staticmethod
     def _build_weather_card_cache_key(
@@ -182,22 +195,22 @@ class MessageBuildService:
         if not isinstance(domain_event, WeatherEvent):
             raise TypeError("weather card cache key requires WeatherEvent")
 
-        description = ""
         metadata = weather.metadata if isinstance(weather.metadata, dict) else {}
-        if isinstance(metadata, dict):
-            description = str(metadata.get("description", ""))[:200]
 
         key_obj = {
             "type": "weather_card",
             "event_id": weather.id or "unknown_event",
             "title": domain_event.title,
             "headline": domain_event.headline,
-            "description": description,
+            "effective_at": domain_event.effective_at.isoformat()
+            if domain_event.effective_at
+            else None,
+            "metadata": metadata,
             "template": weather_config.get("weather_card_template", "Aurora"),
             "max_description_length": weather_config.get("max_description_length", 512),
             "timezone": display_timezone,
         }
-        return json.dumps(key_obj, sort_keys=True, ensure_ascii=False)
+        return json.dumps(key_obj, sort_keys=True, ensure_ascii=False, default=str)
 
     async def _append_remote_image_component(
         self,
@@ -283,7 +296,7 @@ class MessageBuildService:
         source_id = self._resolve_source_id(event)
         message_format_config = active_config.get("message_format", {})
 
-        # 若当前事件满足卡片条件，则优先直接返回卡片消息（包含内置地图）。
+        # 若当前事件满足卡片条件，则优先构建卡片消息（包含内置地图）。
         earthquake_card = await self._try_build_earthquake_card(
             event,
             source_id=source_id,
@@ -291,6 +304,9 @@ class MessageBuildService:
             message_format_config=message_format_config,
         )
         if earthquake_card is not None:
+            await self._append_cwa_report_media_if_needed(
+                earthquake_card, event, source_id
+            )
             return earthquake_card
 
         weather_card = await self._try_build_weather_card(
@@ -390,14 +406,26 @@ class MessageBuildService:
     ) -> MessageChain | None:
         """尝试构建通用地震信息展示卡片（支持所有地震数据源）。"""
         use_card = message_format_config.get("use_earthquake_card", False)
+        use_legacy_global_quake_card = (
+            source_id == "global_quake"
+            and message_format_config.get("use_global_quake_card", False)
+        )
         domain_event = self._get_domain_event(event)
         if not (
-            use_card
+            (use_card or use_legacy_global_quake_card)
             and isinstance(domain_event, EarthquakeEvent)
         ):
             return None
 
         try:
+            if use_legacy_global_quake_card and not use_card:
+                return await self.manager.global_quake_card_builder.build(
+                    event,
+                    active_config=active_config,
+                    message_format_config=message_format_config,
+                    cache_key_builder=self._build_global_quake_card_cache_key,
+                    render_with_cache=self.manager._render_with_cache,
+                )
             return await self.manager.earthquake_card_builder.build(
                 event,
                 active_config=active_config,

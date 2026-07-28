@@ -284,6 +284,7 @@ class GlobalQuakeParser(BaseParser):
                 else "earthquake_warning",
                 "max_pga": eq_data.get("maxPGA"),
                 "stations": eq_data.get("stationCount"),
+                "quality": eq_data.get("quality"),
                 "report_num": report_num,
             }
             event_id = str(eq_data.get("id", "") or "")

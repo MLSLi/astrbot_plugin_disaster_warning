@@ -686,6 +686,12 @@ class ConfigValidator:
                 f"[灾害预警] 配置警告: 地震卡片模板 '{eq_template}' 不在标准列表中，请确认是否为自定义模板。"
             )
 
+        legacy_gq_template = cfg.get("global_quake_template")
+        if legacy_gq_template and legacy_gq_template not in valid_templates:
+            logger.warning(
+                f"[灾害预警] 配置警告: Global Quake 卡片模板 '{legacy_gq_template}' 不在标准列表中。"
+            )
+
         # Playwright 模式校验
         pw_mode = cfg.get("playwright_mode")
         valid_modes = ["local", "remote"]
@@ -724,6 +730,7 @@ class ConfigValidator:
         ConfigValidator._ensure_bool(cfg, "include_map", False)
         ConfigValidator._ensure_bool(cfg, "detailed_jma_intensity", False)
         ConfigValidator._ensure_bool(cfg, "use_earthquake_card", False)
+        ConfigValidator._ensure_bool(cfg, "use_global_quake_card", False)
 
         return cfg
 

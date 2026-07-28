@@ -6,18 +6,19 @@ Global Quake 卡片构建器。
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 from collections.abc import Awaitable, Callable
-from datetime import datetime
 from typing import Any
 
-from jinja2 import Template
+from jinja2 import Environment, StrictUndefined
+from markupsafe import Markup
 
 from astrbot.api import logger
 from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Image
 
-from ....utils.map_tile_sources import get_tile_url_js
+from ....utils.map_tile_sources import get_tile_url
 from ..presenters.global_quake_display_context import GlobalQuakeDisplayContextBuilder
 
 
@@ -54,7 +55,8 @@ class GlobalQuakeCardBuilder:
             # 地图底图源和缩放级别由消息格式配置控制，方便不同会话按需调整展示风格。
             map_source = message_format_config.get("map_source", "PetalMap矢量图亮")
             context["map_source"] = map_source
-            context["tile_url"] = get_tile_url_js(map_source)
+            context["tile_url"] = get_tile_url(map_source)
+            context["tile_subdomains"] = ["1", "2", "3", "4"]
 
             template_name = message_format_config.get("global_quake_template", "Aurora")
             resources_dir = os.path.join(self.plugin_root, "resources")
@@ -94,9 +96,10 @@ class GlobalQuakeCardBuilder:
                 os.path.join(resources_dir, "card_templates", "map_render_helper.js")
             )
             with open(map_helper_path, encoding="utf-8") as helper_file:
-                context["map_render_helper_js"] = helper_file.read()
+                context["map_render_helper_js"] = Markup(helper_file.read())
 
-            template = Template(template_content)
+            environment = Environment(autoescape=True, undefined=StrictUndefined)
+            template = environment.from_string(template_content)
             html_content = template.render(**context)
 
             card_cache_key = cache_key_builder(
@@ -106,13 +109,16 @@ class GlobalQuakeCardBuilder:
             )
 
             async def render_gq_card() -> str | None:
-                # 真实去重依赖外层 cache_key，这里的文件名只要保证落盘时基本唯一即可。
-                image_filename = (
-                    f"gq_card_{earthquake.id}_{int(datetime.now().timestamp())}.png"
-                )
+                cache_digest = hashlib.sha256(card_cache_key.encode()).hexdigest()[:20]
+                image_filename = f"gq_card_{cache_digest}.png"
                 image_path = os.path.join(self.temp_dir, image_filename)
+                selector = (
+                    ".quake-card"
+                    if template_name == "DarkNight"
+                    else "#card-wrapper"
+                )
                 return await self.browser_manager.render_card(
-                    html_content, image_path, selector="#card-wrapper"
+                    html_content, image_path, selector=selector
                 )
 
             result_path = await render_with_cache(card_cache_key, render_gq_card)

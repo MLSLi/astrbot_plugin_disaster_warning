@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from typing import Any
 
 from astrbot.api import logger
@@ -26,63 +27,33 @@ class PushExecutionService:
 
     @staticmethod
     def _build_plaintext_fallback_message(message: MessageChain) -> MessageChain | None:
-        """构建发送失败后的降级消息，保留文本与安全的本地图片组件。"""
+        """从原消息链提取文本，构建发送失败后的纯文本降级消息。"""
         if not isinstance(message, MessageChain):
             return None
 
-        fallback_components: list[Any] = []
         text_parts: list[str] = []
         for component in getattr(message, "chain", []) or []:
             text = getattr(component, "text", None)
             if isinstance(text, str) and text.strip():
                 text_parts.append(text)
-                continue
-
-            component_type = type(component).__name__.lower()
-            if "image" not in component_type:
-                continue
-
-            file_attr = getattr(component, "file", None)
-            path_attr = getattr(component, "path", None)
-            url_attr = getattr(component, "url", None)
-            data_attr = getattr(component, "data", None)
-            base64_attr = getattr(component, "base64", None)
-
-            # 只保留非 HTTP 外部网络地址的安全本地物理路径图片及 Base64 字符图片做降级发送，过滤危险的不在线网络大图
-            if (
-                isinstance(file_attr, str)
-                and file_attr.strip()
-                and not str(file_attr).startswith(("http://", "https://"))
-            ):
-                fallback_components.append(component)
-                continue
-            if (
-                isinstance(path_attr, str)
-                and path_attr.strip()
-                and not str(path_attr).startswith(("http://", "https://"))
-            ):
-                fallback_components.append(component)
-                continue
-            if data_attr:
-                fallback_components.append(component)
-                continue
-            if isinstance(base64_attr, str) and base64_attr.strip():
-                fallback_components.append(component)
-                continue
-            if isinstance(url_attr, str) and url_attr.strip().startswith(
-                ("http://", "https://")
-            ):
-                continue
 
         merged_text = "\n".join(
             part.rstrip() for part in text_parts if part.strip()
         ).strip()
-        if merged_text:
-            fallback_components.insert(0, Plain(merged_text))
-
-        if not fallback_components:
+        if not merged_text:
             return None
-        return MessageChain(fallback_components)
+        return MessageChain([Plain(merged_text)])
+
+    @staticmethod
+    def _message_contains_text(message: MessageChain | None) -> bool:
+        """判断消息链是否包含可用于降级重发的文本。"""
+        if not isinstance(message, MessageChain):
+            return False
+        return any(
+            isinstance(getattr(component, "text", None), str)
+            and bool(component.text.strip())
+            for component in (getattr(message, "chain", []) or [])
+        )
 
     async def execute(
         self,
@@ -138,15 +109,24 @@ class PushExecutionService:
         message_task_cache: dict[str, asyncio.Task[MessageChain]] = {}
         message_task_lock = asyncio.Lock()
 
-        async def get_or_build_message(runtime_config: dict[str, Any]) -> MessageChain:
+        async def get_or_build_message(
+            message_event: EventEnvelope,
+            runtime_config: dict[str, Any],
+        ) -> MessageChain:
             # 构建缓存键时纳入所有会影响展示结果的关键配置，避免不同配置误复用。
             message_format_config = runtime_config.get("message_format", {})
             weather_config = runtime_config.get("weather_config", {})
             cache_key = json.dumps(
                 {
-                    "event_id": event.id,
-                    "source": event.source_id,
-                    "event_type": event.event_type,
+                    "event_id": message_event.id,
+                    "source": message_event.source_id,
+                    "event_type": message_event.event_type,
+                    "local_estimation": message_event.metadata.get(
+                        "local_estimation"
+                    )
+                    if isinstance(message_event.metadata, dict)
+                    else None,
+                    "local_monitoring": runtime_config.get("local_monitoring", {}),
                     "display_timezone": runtime_config.get("display_timezone", "UTC+8"),
                     "message_format": {
                         "include_map": message_format_config.get("include_map", False),
@@ -164,6 +144,12 @@ class PushExecutionService:
                         ),
                         "earthquake_card_template": message_format_config.get(
                             "earthquake_card_template", "Aurora"
+                        ),
+                        "use_global_quake_card": message_format_config.get(
+                            "use_global_quake_card", False
+                        ),
+                        "global_quake_template": message_format_config.get(
+                            "global_quake_template", "Aurora"
                         ),
                         "detailed_jma_intensity": message_format_config.get(
                             "detailed_jma_intensity", False
@@ -186,6 +172,7 @@ class PushExecutionService:
                 },
                 sort_keys=True,
                 ensure_ascii=False,
+                default=str,
             )
             task = message_task_cache.get(cache_key)
             if task is None:
@@ -195,7 +182,7 @@ class PushExecutionService:
                         # 触发异步消息渲染任务 (包含文本和地图卡片渲染)
                         task = asyncio.create_task(
                             self.manager.message_build_service.build_message_async(
-                                event,
+                                message_event,
                                 runtime_config=runtime_config,
                             )
                         )
@@ -206,6 +193,7 @@ class PushExecutionService:
             session: str,
             runtime_config: dict[str, Any],
         ) -> tuple[bool, str, dict[str, Any] | None, str | None]:
+            decision_accepted = False
             try:
                 # 预筛通过后，在真正发送前再次复核；真实推送提交报数状态，
                 # 模拟推送只复用筛选与渲染链路，不污染运行时规则状态。
@@ -226,18 +214,31 @@ class PushExecutionService:
                             f"[灾害预警] 事件 {event.id} 在会话 {session} 发送前复核未通过，原因：{decision.reason}"
                         )
                     return False, session, None, "发送前复核未通过"
+                decision_accepted = True
 
                 logger.debug(
                     f"[灾害预警] 事件 {event.id} 通过会话 {session} 的发送前复核，准备发送消息"
                 )
+                local_estimation = decision.context.get("local_estimation")
+                session_event = event
+                if isinstance(local_estimation, dict) and local_estimation:
+                    session_metadata = dict(event.metadata or {})
+                    session_metadata["local_estimation"] = dict(local_estimation)
+                    session_event = replace(event, metadata=session_metadata)
                 # 获取复用或动态渲染的图片/卡片消息链
-                message = await get_or_build_message(runtime_config)
+                message = await get_or_build_message(session_event, runtime_config)
                 # 调用底座 Session 发送器下发消息
                 await self.manager.session_sender.send(session, message)
                 logger.debug(f"[灾害预警] 事件 {event.id} 已推送到 {session}")
                 return True, session, runtime_config.get("message_format", {}), None
             except Exception as e:
                 error_name = type(e).__name__
+
+                if not decision_accepted:
+                    logger.error(
+                        f"[灾害预警] 会话 {session} 发送前规则复核异常，已中止推送: {e}"
+                    )
+                    return False, session, None, f"发送前复核异常({error_name})"
 
                 # 检测是否为超时相关的异常。当发生超时时，QQ服务端实际上可能已经成功投递了消息。
                 # 为了防止降级重发导致重复发送，如果检测到超时，我们将直接记录日志，不执行 fallback 降级重发。
@@ -272,9 +273,19 @@ class PushExecutionService:
                 logger.error(f"[灾害预警] 推送到 {session} 失败: {e}")
 
                 # 如果富媒体发送失败，则尝试从原消息链中提取纯文本进行降级重发。
+                original_message = locals().get("message")
                 fallback_message = self._build_plaintext_fallback_message(
-                    locals().get("message")
+                    original_message
                 )
+                if not self._message_contains_text(original_message):
+                    fallback_event = locals().get("session_event", event)
+                    message_format_config = runtime_config.get("message_format", {})
+                    fallback_message = self.manager.text_message_builder.build(
+                        fallback_event,
+                        source_id,
+                        message_format_config,
+                        full_config=runtime_config,
+                    )
                 if fallback_message is not None:
                     try:
                         await self.manager.session_sender.send(

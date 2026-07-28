@@ -6,17 +6,21 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from jinja2 import Template
+from jinja2 import Environment, StrictUndefined
 
 from astrbot.api import logger
 from astrbot.api.event import MessageChain
 from astrbot.api.message_components import Image
 
+from ....utils.time_converter import TimeConverter
+from ...domain.event_context import WeatherDisplayContext
 from ...domain.event_models import EventEnvelope, WeatherEvent
+from ...services.display.service import build_display_context
 from ..presenters.weather_constants import (
     COLOR_LEVEL_EMOJI,
     SORTED_WEATHER_TYPES,
@@ -34,27 +38,28 @@ class WeatherCardBuilder:
 
     @staticmethod
     def _build_context(
-        event: EventEnvelope,
+        display_context: WeatherDisplayContext,
         options: dict | None = None,
     ) -> dict:
         """构建气象卡片渲染上下文。"""
         options = options or {}
-        domain = event.event
-        if not isinstance(domain, WeatherEvent):
-            raise TypeError("Weather card context requires WeatherEvent")
-
-        title = domain.title or ""
-        headline = domain.headline or ""
-        metadata = dict(event.metadata or {})
+        title = display_context.title or ""
+        headline = display_context.headline or ""
+        metadata = dict(display_context.metadata or {})
 
         # 匹配文本候选集：对齐 WeatherAlertPresenter，覆盖 weather_type + metadata + title + headline
         match_candidates = [
+            display_context.weather_type,
             metadata.get("weather_type", ""),
             metadata.get("type", ""),
             title,
             headline,
         ]
-        match_text = " ".join(str(c).strip() for c in match_candidates if str(c).strip())
+        match_text = " ".join(
+            str(candidate).strip()
+            for candidate in match_candidates
+            if str(candidate).strip()
+        )
 
         emoji = "⛈️"
         for name in SORTED_WEATHER_TYPES:
@@ -65,25 +70,40 @@ class WeatherCardBuilder:
         color_emoji = ""
         color_level = ""
         # 颜色等级候选集：对齐 WeatherAlertPresenter，覆盖 severity_color + title + headline
-        color_candidates = [metadata.get("severity_color", ""), title, headline]
+        color_candidates = [display_context.severity_color, title, headline]
         for color, icon in COLOR_LEVEL_EMOJI.items():
             if any(color and color in str(c) for c in color_candidates if c):
                 color_emoji = icon
                 color_level = color
                 break
 
-        color_key_map = {"红色": "red", "橙色": "orange", "黄色": "yellow", "蓝色": "blue", "白色": "white"}
-
-        from ....utils.time_converter import TimeConverter
+        color_key_map = {
+            "红色": "red",
+            "橙色": "orange",
+            "黄色": "yellow",
+            "蓝色": "blue",
+            "白色": "white",
+        }
 
         timezone_str = options.get("timezone", "UTC+8")
+        effective_at = display_context.effective_at
+        source_descriptor = display_context.source_descriptor
+        if effective_at is not None and effective_at.tzinfo is None:
+            source_timezone = (
+                source_descriptor.default_timezone
+                if source_descriptor is not None
+                else "UTC"
+            )
+            effective_at = effective_at.replace(
+                tzinfo=TimeConverter._get_timezone(source_timezone)
+            )
         time_str = (
-            TimeConverter.format_time(domain.effective_at, timezone_str)
-            if domain.effective_at
-            else "Unknown Time"
+            TimeConverter.format_time(effective_at, timezone_str)
+            if effective_at
+            else "未知时间"
         )
 
-        description = metadata.get("description", "")
+        description = display_context.description or ""
         max_len = options.get("max_description_length", 512)
         if max_len > 0 and len(description) > max_len:
             description = description[: max_len - 3] + "..."
@@ -99,7 +119,9 @@ class WeatherCardBuilder:
             footer_items.append({"label": "副标题", "value": headline})
 
         return {
-            "source_name": "中国气象局",
+            "source_name": source_descriptor.display_name
+            if source_descriptor is not None
+            else display_context.source_id,
             "emoji": emoji,
             "title": title or headline or "气象预警",
             "color_emoji": color_emoji,
@@ -108,7 +130,7 @@ class WeatherCardBuilder:
             "description": description,
             "time_str": time_str,
             "glow_class": glow_class,
-            "event_id": event.id or "N/A",
+            "event_id": display_context.event_id or "N/A",
             "footer_items": footer_items,
         }
 
@@ -135,7 +157,10 @@ class WeatherCardBuilder:
                 "timezone": display_timezone,
                 "max_description_length": max_desc_len,
             }
-            context = self._build_context(event, options)
+            display_context = build_display_context(event, event.source_id, options)
+            if not isinstance(display_context, WeatherDisplayContext):
+                return None
+            context = self._build_context(display_context, options)
 
             template_name = weather_config.get("weather_card_template", "Aurora")
             resources_dir = os.path.join(self.plugin_root, "resources")
@@ -150,13 +175,15 @@ class WeatherCardBuilder:
             with open(template_path, encoding="utf-8") as f:
                 template_content = f.read()
 
-            template = Template(template_content)
+            environment = Environment(autoescape=True, undefined=StrictUndefined)
+            template = environment.from_string(template_content)
             html_content = template.render(**context)
 
             card_cache_key = cache_key_builder(event, weather_config, display_timezone)
 
             async def render_card() -> str | None:
-                image_filename = f"weather_card_{event.id}_1.png"
+                cache_digest = hashlib.sha256(card_cache_key.encode()).hexdigest()[:20]
+                image_filename = f"weather_card_{cache_digest}.png"
                 image_path = os.path.join(self.temp_dir, image_filename)
                 return await self.browser_manager.render_card(
                     html_content, image_path, selector="#card-wrapper"

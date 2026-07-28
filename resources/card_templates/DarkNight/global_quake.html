@@ -306,11 +306,12 @@
 
     <!-- Leaflet 地图脚本 -->
     <script>
-        const lat = Number("{{ latitude }}");
-        const lng = Number("{{ longitude }}");
+        const lat = Number({{ latitude | tojson }});
+        const lng = Number({{ longitude | tojson }});
 
         // 初始化地图,中心为震中位置
-        const zoomLevel = Number("{{ zoom_level }}") || 5;
+        const configuredZoom = Number({{ zoom_level | tojson }});
+        const zoomLevel = Number.isFinite(configuredZoom) ? configuredZoom : 5;
         const map = L.map('map-container', {
             center: [lat, lng],
             zoom: zoomLevel,
@@ -322,9 +323,10 @@
         });
 
         // 添加瓦片层（从配置读取完整URL）
-        const tileLayer = L.tileLayer(`{{ tile_url }}`, {
+        const tileLayer = L.tileLayer({{ tile_url | tojson }}, {
+            subdomains: {{ tile_subdomains | tojson }},
             maxZoom: 18,
-            minZoom: 1,
+            minZoom: 0,
             keepBuffer: 2,
             updateWhenIdle: true,
             updateWhenZooming: false

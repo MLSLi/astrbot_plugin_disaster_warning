@@ -589,6 +589,22 @@
           "Aurora",
           "DarkNight"
         ]
+      },
+      "use_global_quake_card": {
+        "description": "仅启用 Global Quake 卡片消息（兼容配置）",
+        "type": "bool",
+        "hint": "兼容旧版本配置，仅将 Global Quake 预警渲染为专用卡片。新配置建议使用上方的地震卡片开关。",
+        "default": false
+      },
+      "global_quake_template": {
+        "description": "Global Quake 专用卡片模板（兼容配置）",
+        "type": "string",
+        "hint": "仅在兼容的 Global Quake 卡片开关单独启用时生效。",
+        "default": "Aurora",
+        "options": [
+          "Aurora",
+          "DarkNight"
+        ]
       }
     }
   },
@@ -776,6 +792,30 @@
         "default": "",
         "hint": "设置后访问管理界面需要输入密码，留空则无需密码",
         "hidden": true
+      }
+    }
+  },
+  "notification_settings": {
+    "description": "🔔 官方通知配置",
+    "type": "object",
+    "hint": "接收插件更新、修复说明与注意事项等官方通知",
+    "items": {
+      "enabled": {
+        "description": "启用通知中心",
+        "type": "bool",
+        "default": true,
+        "hint": "启用后，插件将定时从远端通知平台拉取通知并同步到 Web 管理端。关闭后将停止远端通知轮询，但仍保留本地已读缓存"
+      },
+      "poll_interval_seconds": {
+        "description": "通知轮询间隔",
+        "type": "int",
+        "default": 300,
+        "hint": "单位：秒。插件向远端通知平台轮询更新的时间间隔，最低将按 30 秒处理",
+        "slider": {
+          "min": 30,
+          "max": 86400,
+          "step": 30
+        }
       }
     }
   },

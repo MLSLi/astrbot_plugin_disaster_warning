@@ -303,8 +303,9 @@
                 </div>
             </div>
 
-            <!-- 地图容器 -->
+            {% if has_coordinates %}
             <div id="map-container"></div>
+            {% endif %}
 
             {% if footer_items %}
             <div class="footer-grid" style="grid-template-columns: repeat({{ [footer_items|length, 3]|min }}, 1fr);">
@@ -324,12 +325,13 @@
         </div>
     </div>
 
-    <!-- Leaflet 地图脚本 -->
+    {% if has_coordinates %}
     <script>
-        const lat = Number("{{ latitude }}");
-        const lng = Number("{{ longitude }}");
+        const lat = {{ latitude | tojson }};
+        const lng = {{ longitude | tojson }};
 
-        const zoomLevel = Number("{{ zoom_level }}") || 5;
+        const configuredZoom = Number({{ zoom_level | tojson }});
+        const zoomLevel = Number.isFinite(configuredZoom) ? configuredZoom : 5;
         const map = L.map('map-container', {
             center: [lat, lng],
             zoom: zoomLevel,
@@ -340,9 +342,10 @@
             markerZoomAnimation: false
         });
 
-        const tileLayer = L.tileLayer(`{{ tile_url }}`, {
+        const tileLayer = L.tileLayer({{ tile_url | tojson }}, {
+            subdomains: {{ tile_subdomains | tojson }},
             maxZoom: 18,
-            minZoom: 1,
+            minZoom: 0,
             keepBuffer: 2,
             updateWhenIdle: true,
             updateWhenZooming: false
@@ -375,6 +378,7 @@
 
         console.log("Map Init Complete");
     </script>
+    {% endif %}
 </body>
 
 </html>

@@ -87,6 +87,7 @@ class MessageManagerBootstrapService:
         if playwright_mode == "local" and (
             msg_config.get("include_map", False)
             or msg_config.get("use_earthquake_card", False)
+            or msg_config.get("use_global_quake_card", False)
             or weather_cfg.get("use_weather_card", False)
         ):
             logger.debug("[灾害预警] 检测到已启用卡片渲染功能，正在后台预热浏览器...")
