@@ -94,6 +94,30 @@ class BrowserManager:
         except Exception as diag_err:
             logger.warning(f"[灾害预警] 页面诊断({reason})失败: {diag_err}")
 
+    async def _discard_page_and_recover(self, page: Page) -> None:
+        """关闭不可复用页面，并补足页面池容量。"""
+        try:
+            await page.close()
+            logger.debug("[灾害预警] 已关闭损坏的页面")
+        except Exception:
+            pass
+
+        async with self._page_creation_lock:
+            try:
+                if (
+                    self._browser
+                    and not self._closed
+                    and self._page_pool.qsize() < self.pool_size
+                ):
+                    new_page = await self._browser.new_page(
+                        viewport={"width": 800, "height": 800},
+                        device_scale_factor=2,
+                    )
+                    await self._page_pool.put(new_page)
+                    logger.debug("[灾害预警] 已重新创建页面")
+            except Exception as recover_err:
+                logger.error(f"[灾害预警] 页面恢复失败: {recover_err}")
+
     async def initialize(self):
         """初始化浏览器和页面池"""
         async with self._init_lock:
@@ -248,6 +272,7 @@ class BrowserManager:
             return None
 
         page: Page | None = None
+        page_reusable = True
         start_time = time.time()
 
         acquired_semaphore = False
@@ -414,15 +439,22 @@ class BrowserManager:
                         )
                         return None
 
+                except (Exception, asyncio.CancelledError):
+                    page_reusable = False
+                    raise
                 finally:
                     # 本地模式：归还页面到池
-                    if page:
+                    if page and page_reusable:
                         await self._page_pool.put(page)
             finally:
                 # 释放信号量
                 if acquired_semaphore:
                     self._semaphore.release()
 
+        except asyncio.CancelledError:
+            if page:
+                await self._discard_page_and_recover(page)
+            raise
         except Exception as e:
             logger.error(f"[灾害预警] 卡片渲染失败: {e}")
             # 上报卡片渲染错误到遥测
@@ -432,25 +464,7 @@ class BrowserManager:
                 )
             # 如果页面损坏，关闭它并恢复页面池（仅本地模式）
             if page:
-                try:
-                    await page.close()
-                    logger.debug("[灾害预警] 已关闭损坏的页面")
-                except Exception:
-                    pass
-
-                # 恢复页面池
-                async with self._page_creation_lock:
-                    try:
-                        if self._browser and not self._closed:
-                            if self._page_pool.qsize() < self.pool_size:
-                                new_page = await self._browser.new_page(
-                                    viewport={"width": 800, "height": 800},
-                                    device_scale_factor=2,
-                                )
-                                await self._page_pool.put(new_page)
-                                logger.debug("[灾害预警] 已重新创建页面")
-                    except Exception as recover_err:
-                        logger.error(f"[灾害预警] 页面恢复失败: {recover_err}")
+                await self._discard_page_and_recover(page)
 
             return None
 

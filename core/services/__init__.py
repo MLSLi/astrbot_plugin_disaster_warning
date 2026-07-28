@@ -41,6 +41,11 @@ from .identity.event_identity import (
     resolve_source_id,
 )
 from .query.earthquake_list_service import EarthquakeListService
+from .query.recent_earthquake_query_service import (
+    format_recent_earthquake_text,
+    query_recent_official_earthquakes,
+    select_recent_official_earthquake_records,
+)
 from .query.eew_query_state_service import EEWQueryStateService
 from .query.source_runtime_query_service import SourceRuntimeQueryService
 from .simulation.simulation_service import (
@@ -60,6 +65,9 @@ __all__ = [
     "EventDeduplicationService",
     "EEWQueryStateService",
     "EarthquakeListService",
+    "format_recent_earthquake_text",
+    "query_recent_official_earthquakes",
+    "select_recent_official_earthquake_records",
     "IntensityService",
     "RegionService",
     "WeatherRegionResolver",

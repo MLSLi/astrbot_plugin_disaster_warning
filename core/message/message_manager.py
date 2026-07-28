@@ -264,11 +264,14 @@ class MessagePushManager:
         )
 
     async def render_earthquake_list_card(
-        self, events: list[dict], source_name: str
+        self,
+        events: list[dict],
+        source_name: str,
+        query_summary: str = "",
     ) -> str | None:
         """渲染地震列表卡片"""
         return await self.card_message_builder.render_earthquake_list_card(
-            events, source_name
+            events, source_name, query_summary=query_summary
         )
 
     async def cleanup_browser(self):

@@ -1,12 +1,13 @@
 """
 插件查询与模拟命令服务。
-负责气象预警查询、地震预警查询、地震列表查询与灾害预警模拟命令逻辑，
+负责气象预警、地震预警、地震列表、近期地震信息查询与灾害预警模拟命令逻辑，
 减少 main.DisasterWarningPlugin 中的查询与展示流程实现。
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 import traceback
 
 import astrbot.api.message_components as Comp
@@ -14,9 +15,18 @@ from astrbot.api import logger
 from astrbot.api.event import MessageChain
 
 from ...core.app.services import format_earthquake_list_text, quoted_plain_result
+from ...core.services.query.recent_earthquake_query_service import (
+    format_recent_earthquake_text,
+    query_recent_official_earthquakes,
+)
 from ...core.services.query.weather_query_service import query_weather_alarm_data
 from ...core.services.simulation.simulation_service import build_earthquake_simulation
 from .telemetry_mixin import CommandTelemetryMixin
+
+
+_RECENT_EARTHQUAKE_FORWARD_THRESHOLD = 5
+_RECENT_EARTHQUAKE_RENDER_TIMEOUT_SECONDS = 120
+_FORWARD_NODE_PLATFORMS = {"aiocqhttp"}
 
 
 class PluginQueryCommandService(CommandTelemetryMixin):
@@ -391,6 +401,260 @@ class PluginQueryCommandService(CommandTelemetryMixin):
             yield _quoted_plain_result(text)
         except Exception as e:
             logger.error(f"[灾害预警] 查询地震列表失败: {e}")
+            yield _quoted_plain_result(f"❌ 查询失败: {e}")
+
+    async def handle_query_recent_earthquakes(
+        self,
+        event,
+        hours: int = 24,
+        count: int = 9,
+        mode: str = "card",
+    ):
+        """查询时间窗口内各机构发布或已复核的地震信息。"""
+
+        def _quoted_plain_result(text: str):
+            return quoted_plain_result(self.plugin, event, text)
+
+        def _supports_forward_nodes() -> bool:
+            try:
+                return (
+                    str(event.get_platform_name()).strip().lower()
+                    in _FORWARD_NODE_PLATFORMS
+                )
+            except (AttributeError, TypeError):
+                return False
+
+        def _track_temporary_file(path: str | None) -> None:
+            if not path:
+                return
+            track_file = getattr(event, "track_temporary_local_file", None)
+            if callable(track_file):
+                track_file(path)
+
+        def _remove_rendered_files(paths: list[str | None]) -> None:
+            for path in paths:
+                if not path:
+                    continue
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+                except OSError as cleanup_error:
+                    logger.warning(
+                        f"[灾害预警] 清理近期地震临时卡片失败 {path}: "
+                        f"{cleanup_error}"
+                    )
+
+        if not self.plugin.disaster_service:
+            yield _quoted_plain_result("❌ 灾害预警服务未启动")
+            return
+
+        normalized_mode = str(mode or "card").strip().lower()
+        if normalized_mode not in {"card", "text"}:
+            yield _quoted_plain_result("❌ 无效的格式，仅支持 card 或 text")
+            return
+
+        if hours < 1:
+            hours = 1
+        elif hours > 720:
+            hours = 720
+            yield _quoted_plain_result("⚠️ 提示：查询时间窗口最多支持 720 小时")
+
+        if count < 1:
+            count = 1
+        elif count > 50:
+            count = 50
+            yield _quoted_plain_result("⚠️ 提示：近期地震查询最多支持显示 50 条信息")
+
+        try:
+            statistics_manager = self.plugin.disaster_service.statistics_manager
+            await statistics_manager.initialize()
+            items = await query_recent_official_earthquakes(
+                statistics_manager.db,
+                hours=hours,
+                count=count,
+                display_timezone=self.plugin.config.get("display_timezone", "UTC+8"),
+            )
+            if not items:
+                await self._track_command_feature(
+                    "command_recent_earthquake_query",
+                    {
+                        "success": True,
+                        "mode": normalized_mode,
+                        "hours": int(hours),
+                        "count": 0,
+                    },
+                )
+                yield _quoted_plain_result(
+                    f"最近 {hours} 小时内暂无符合条件的地震信息"
+                )
+                return
+
+            manager = self.plugin.disaster_service.message_manager
+            if normalized_mode == "card" and manager:
+                if (
+                    len(items) >= _RECENT_EARTHQUAKE_FORWARD_THRESHOLD
+                    and _supports_forward_nodes()
+                ):
+                    browser_manager = getattr(manager, "browser_manager", None)
+                    browser_pool_size = int(
+                        getattr(browser_manager, "pool_size", 2) or 2
+                    )
+                    render_semaphore = asyncio.Semaphore(
+                        max(1, min(browser_pool_size, 3))
+                    )
+                    image_paths: list[str | None] = [None] * len(items)
+
+                    async def _render_item_card(index: int, item: dict) -> None:
+                        try:
+                            async with render_semaphore:
+                                image_paths[index] = (
+                                    await manager.render_earthquake_list_card(
+                                        [item],
+                                        "近期地震信息",
+                                        query_summary=(
+                                            f"最近 {hours} 小时 · "
+                                            f"信息来源：{item['source_label']}"
+                                        ),
+                                    )
+                                )
+                        except Exception as render_error:
+                            logger.warning(
+                                "[灾害预警] 近期地震单卡片渲染失败，"
+                                f"将使用文本节点: {render_error}"
+                            )
+
+                    render_tasks = [
+                        asyncio.create_task(_render_item_card(index, item))
+                        for index, item in enumerate(items)
+                    ]
+                    try:
+                        _, pending_tasks = await asyncio.wait(
+                            render_tasks,
+                            timeout=_RECENT_EARTHQUAKE_RENDER_TIMEOUT_SECONDS,
+                        )
+                        if pending_tasks:
+                            logger.warning(
+                                "[灾害预警] 近期地震卡片批量渲染超时，"
+                                f"{len(pending_tasks)} 条将使用文本节点"
+                            )
+                            for task in pending_tasks:
+                                task.cancel()
+                            await asyncio.gather(
+                                *pending_tasks,
+                                return_exceptions=True,
+                            )
+                    except asyncio.CancelledError:
+                        for task in render_tasks:
+                            if not task.done():
+                                task.cancel()
+                        await asyncio.gather(
+                            *render_tasks,
+                            return_exceptions=True,
+                        )
+                        _remove_rendered_files(image_paths)
+                        raise
+
+                    try:
+                        bot_id = event.get_self_id() or "0"
+                        nodes = Comp.Nodes([])
+                        for item, image_path in zip(items, image_paths, strict=True):
+                            if image_path:
+                                content = [Comp.Image.fromFileSystem(image_path)]
+                            else:
+                                content = [
+                                    Comp.Plain(
+                                        format_recent_earthquake_text([item], hours)
+                                    )
+                                ]
+                            nodes.nodes.append(
+                                Comp.Node(
+                                    uin=bot_id,
+                                    name="灾害预警",
+                                    content=content,
+                                )
+                            )
+
+                        sent = await self.plugin.context.send_message(
+                            event.unified_msg_origin,
+                            MessageChain([nodes]),
+                        )
+                        if sent is False:
+                            raise RuntimeError("AstrBot 未找到可处理当前会话的平台实例")
+                    except Exception as forward_error:
+                        logger.warning(
+                            "[灾害预警] 近期地震合并消息发送失败，"
+                            f"回退列表卡片: {forward_error}"
+                        )
+                    else:
+                        await self._track_command_feature(
+                            "command_recent_earthquake_query",
+                            {
+                                "success": True,
+                                "mode": "forward_cards",
+                                "hours": int(hours),
+                                "count": len(items),
+                            },
+                        )
+                        prevent_default_reply = getattr(
+                            event, "should_call_llm", None
+                        )
+                        if callable(prevent_default_reply):
+                            prevent_default_reply(False)
+                        stop_event = getattr(event, "stop_event", None)
+                        if callable(stop_event):
+                            stop_event()
+                        return
+                    finally:
+                        _remove_rendered_files(image_paths)
+
+                query_summary = (
+                    f"最近 {hours} 小时 · {len(items)} 条 · 按来源震级值从高到低排列"
+                )
+                image_path = await manager.render_earthquake_list_card(
+                    items,
+                    "近期地震信息",
+                    query_summary=query_summary,
+                )
+                if image_path:
+                    _track_temporary_file(image_path)
+                    await self._track_command_feature(
+                        "command_recent_earthquake_query",
+                        {
+                            "success": True,
+                            "mode": "card",
+                            "hours": int(hours),
+                            "count": len(items),
+                        },
+                    )
+                    yield event.chain_result(
+                        self.plugin._with_quote_reply(
+                            event,
+                            [Comp.Image.fromFileSystem(image_path)],
+                        )
+                    )
+                    return
+
+            await self._track_command_feature(
+                "command_recent_earthquake_query",
+                {
+                    "success": True,
+                    "mode": "text",
+                    "hours": int(hours),
+                    "count": len(items),
+                },
+            )
+            yield _quoted_plain_result(format_recent_earthquake_text(items, hours))
+        except Exception as e:
+            logger.error(f"[灾害预警] 查询近期地震信息失败: {e}")
+            await self._track_command_feature(
+                "command_recent_earthquake_query",
+                {
+                    "success": False,
+                    "mode": normalized_mode,
+                    "hours": int(hours),
+                },
+            )
             yield _quoted_plain_result(f"❌ 查询失败: {e}")
 
     async def handle_simulate_disaster(

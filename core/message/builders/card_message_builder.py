@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 
-from jinja2 import Template
+from jinja2 import Environment, StrictUndefined
 
 from astrbot.api import logger
 
@@ -25,7 +26,10 @@ class CardMessageBuilder:
         self.browser_manager = browser_manager
 
     async def render_earthquake_list_card(
-        self, events: list[dict], source_name: str
+        self,
+        events: list[dict],
+        source_name: str,
+        query_summary: str = "",
     ) -> str | None:
         """渲染地震列表卡片。"""
         try:
@@ -55,13 +59,14 @@ class CardMessageBuilder:
                 "events": events,
                 "generated_time": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "footer_text": footer_text,
+                "query_summary": query_summary,
             }
 
-            template = Template(template_content)
+            environment = Environment(autoescape=True, undefined=StrictUndefined)
+            template = environment.from_string(template_content)
             html_content = template.render(**context)
 
-            # 输出文件名只要求本次渲染基本唯一，真正去重由上层决定是否复用结果。
-            image_filename = f"eq_list_{int(time.time())}.png"
+            image_filename = f"eq_list_{uuid.uuid4().hex}.png"
             image_path = os.path.join(self.temp_dir, image_filename)
             return await self.browser_manager.render_card(
                 html_content, image_path, selector="#card-wrapper"

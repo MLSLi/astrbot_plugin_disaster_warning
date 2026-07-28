@@ -8,6 +8,7 @@ Schema v2：
 """
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -167,6 +168,7 @@ class DatabaseManager:
             "CREATE INDEX IF NOT EXISTS idx_ev_type      ON events(type)",
             "CREATE INDEX IF NOT EXISTS idx_ev_source_id ON events(source_id)",
             "CREATE INDEX IF NOT EXISTS idx_ev_time      ON events(time)",
+            "CREATE INDEX IF NOT EXISTS idx_ev_type_time ON events(type, time)",
             "CREATE INDEX IF NOT EXISTS idx_ev_is_major  ON events(is_major)",
             "CREATE INDEX IF NOT EXISTS idx_upd_event_id ON event_updates(event_id)",
         ):
@@ -469,6 +471,66 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"[灾害预警] 查询最近事件失败: {e}")
             return []
+
+    async def get_official_earthquake_candidates(
+        self,
+        sources: list[str],
+        *,
+        cutoff: datetime,
+    ) -> list[dict[str, Any]]:
+        """获取近期地震信息候选记录，产品状态与精确时间由查询层判定。"""
+        try:
+            normalized_cutoff = cutoff
+            if normalized_cutoff.tzinfo is None:
+                normalized_cutoff = normalized_cutoff.replace(tzinfo=timezone.utc)
+            else:
+                normalized_cutoff = normalized_cutoff.astimezone(timezone.utc)
+            # 预留一天覆盖各来源无偏移本地时间，精确窗口仍在查询服务中判定。
+            conservative_date = (normalized_cutoff - timedelta(days=1)).strftime(
+                "%Y-%m-%d"
+            )
+            clauses = [
+                "type='earthquake'",
+                "time >= ?",
+                "magnitude IS NOT NULL",
+                "latitude IS NOT NULL",
+                "longitude IS NOT NULL",
+                "COALESCE(TRIM(time), '') != ''",
+            ]
+            params: list[Any] = [conservative_date]
+            self._append_source_filter_clause(sources, clauses, params)
+            where_sql = " AND ".join(clauses)
+
+            cursor = await self.connection.cursor()
+            await cursor.execute(
+                f"""
+                WITH latest_per_event AS (
+                    SELECT
+                        *,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY
+                                COALESCE(NULLIF(source_id, ''), source),
+                                COALESCE(
+                                    NULLIF(real_event_id, ''),
+                                    NULLIF(unique_id, ''),
+                                    CAST(id AS TEXT)
+                                )
+                            ORDER BY updated_at DESC, time DESC, id DESC
+                        ) AS rn
+                    FROM events
+                    WHERE {where_sql}
+                )
+                SELECT *
+                FROM latest_per_event
+                WHERE rn = 1
+                ORDER BY time DESC, updated_at DESC, id DESC
+                """,
+                tuple(params),
+            )
+            return [dict(row) for row in await cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"[灾害预警] 查询正式地震候选记录失败: {e}")
+            raise
 
     async def find_event_by_real_id(
         self, real_event_id: str, source: str

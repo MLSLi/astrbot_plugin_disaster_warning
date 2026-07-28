@@ -125,6 +125,7 @@ class DisasterWarningPlugin(Star):
 • /灾害预警状态 - 查看服务运行状态
 • /灾害预警重连 - 强制重连所有数据源 (仅管理员)
 • /地震列表查询 或 /地震列表 [数据源] [数量] [格式] - 查询最新地震列表
+• /近期地震查询 或 /近期地震 [小时] [数量] [格式] - 查询近期地震信息
 • /地震预警查询 或 /地震预警 - 查询各机构 EEW 状态与无 EEW 计时
 • /气象预警查询 或 /气象预警 <省份/地名|全国> [预警类型] [预警颜色] 或 <预警ID>
 • /灾害预警统计 - 查看详细的事件统计报告
@@ -256,6 +257,23 @@ class DisasterWarningPlugin(Star):
         async for result in self._query_command_service.handle_query_earthquake_list(
             event,
             source=source,
+            count=count,
+            mode=mode,
+        ):
+            yield result
+
+    @filter.command("近期地震查询", alias={"近期地震"})
+    async def query_recent_earthquakes(
+        self,
+        event: AstrMessageEvent,
+        hours: int = 24,
+        count: int = 9,
+        mode: str = "card",
+    ):
+        """查询最近若干小时内各机构发布或已复核的地震信息。"""
+        async for result in self._query_command_service.handle_query_recent_earthquakes(
+            event,
+            hours=hours,
             count=count,
             mode=mode,
         ):

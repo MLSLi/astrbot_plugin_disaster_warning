@@ -113,6 +113,17 @@
             font-family: 'Roboto', 'Arial', sans-serif;
         }
 
+        .source-tag {
+            display: inline-block;
+            margin-right: 4px;
+            padding: 1px 3px;
+            color: #fff;
+            background-color: #555b66;
+            font-size: 9px;
+            font-weight: bold;
+            line-height: 1.1;
+        }
+
         /* --- 右侧：元数据区域 (震级) --- */
         .meta-box {
             width: auto;
@@ -324,6 +335,13 @@
             margin-top: 0;
             font-family: 'Consolas', 'Monaco', monospace;
         }
+
+        .query-summary {
+            margin-bottom: 3px;
+            color: #ddd;
+            font-family: 'MiSans', 'Microsoft YaHei', sans-serif;
+            font-size: 11px;
+        }
     </style>
 </head>
 <body>
@@ -334,7 +352,7 @@
                 震度/烈度框 
                 data-label: 用于首个卡片显示 "最大烈度" 或 "最大震度"
             -->
-            <div class="intensity-box" data-label="{% if 'CENC' in source_name %}最大烈度{% else %}最大震度{% endif %}">
+            <div class="intensity-box" data-label="{{ event.get('intensity_label', '最大烈度' if 'CENC' in source_name else '最大震度') }}">
                 <!-- 内部色块：承载背景色和数值，与顶部标签分离 -->
                 <div class="int-content {{ event.intensity_class }}">
                     {{ event.intensity_display }}
@@ -344,7 +362,9 @@
             <!-- 中间信息：地点和时间 -->
             <div class="info-box">
                 <div class="location">{{ event.location }}</div>
-                <div class="time">{{ event.time }}</div>
+                <div class="time">
+                    {% if event.get('source_label') %}<span class="source-tag">{{ event.source_label }}</span>{% endif %}{{ event.time }}
+                </div>
             </div>
             
             <!-- 右侧元数据：震级和深度 -->
@@ -358,6 +378,7 @@
         {% endfor %}
         
         <div class="footer">
+            {% if query_summary %}<div class="query-summary">{{ query_summary }}</div>{% endif %}
             {{ footer_text }}
         </div>
     </div>

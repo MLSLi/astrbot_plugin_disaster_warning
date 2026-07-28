@@ -490,7 +490,8 @@ SOURCE_CATALOG: dict[str, SourceEntry] = {
         priority=1,
         display_name="美国地质调查局",
         description="美国地质调查局（USGS）：地震测定 - FAN Studio WebSocket",
-        default_timezone="UTC",
+        # FAN Studio 的 shockTime 按接口约定使用 UTC+8；带显式偏移的时间不受此默认值影响。
+        default_timezone="Asia/Shanghai",
         publish_time_field="time",
         issue_type_field="status",
         fingerprint_prefix="usgs",

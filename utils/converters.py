@@ -47,38 +47,67 @@ class ScaleConverter:
         解析日本或台湾震度字符串。
         支持格式：'5-'、'5+'、'5弱'、'5強'、'5'、'6.5' 等。
 
-        映射规则如下：
-        X弱 / X- -> X - 0.5
-        X強 / X+ -> X + 0.5
-        X        -> X.0
+        映射规则按 JMA/CWA 的离散震度档位处理：
+        5弱 / 5- -> 4.5
+        5強 / 5+ -> 5.0
+        6弱 / 6- -> 5.5
+        6強 / 6+ -> 6.0
 
         例如：
         5弱 -> 4.5
-        5強 -> 5.5
+        5強 -> 5.0
         """
         if scale_str is None:
             return None
 
         # 若输入本身已经是数值，则直接返回。
         if isinstance(scale_str, (int, float)):
-            return float(scale_str)
+            numeric_scale = float(scale_str)
+            return numeric_scale if math.isfinite(numeric_scale) else None
 
         scale_str = str(scale_str).strip()
         if not scale_str:
             return None
 
-        # 支持 5+、5-、5弱、5強 等多种格式。
-        match = re.search(r"(\d+)(弱|強|\+|\-)?", scale_str)
+        normalized = scale_str.translate(
+            str.maketrans("０１２３４５６７８９．＋－", "0123456789.+-")
+        ).replace("強", "强")
+        discrete_mapping = {
+            "5-": 4.5,
+            "5弱": 4.5,
+            "5+": 5.0,
+            "5强": 5.0,
+            "6-": 5.5,
+            "6弱": 5.5,
+            "6+": 6.0,
+            "6强": 6.0,
+            "7": 7.0,
+        }
+        if normalized in discrete_mapping:
+            return discrete_mapping[normalized]
+
+        try:
+            numeric_scale = float(normalized)
+            return numeric_scale if math.isfinite(numeric_scale) else None
+        except ValueError:
+            pass
+
+        # 支持“震度5强”等带文本前缀的格式。
+        match = re.search(r"(\d+(?:\.\d+)?)(弱|强|\+|\-)?", normalized)
         if match:
-            base = int(match.group(1))
+            base = float(match.group(1))
             suffix = match.group(2)
+            token = f"{match.group(1)}{suffix or ''}"
+
+            if token in discrete_mapping:
+                return discrete_mapping[token]
 
             if suffix in ["弱", "-"]:
                 return base - 0.5
-            elif suffix in ["強", "+"]:
+            elif suffix in ["强", "+"]:
                 return base + 0.5
             else:
-                return float(base)
+                return base
 
         return None
 
